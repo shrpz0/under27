@@ -102,6 +102,17 @@ export default function ArticleDetail({ articleId, onBack }) {
                 {article.body}
               </div>
             </div>
+            <div className="mt-10">
+              <a
+                href="https://uploads.knightlab.com/storymapjs/0ce1efa9326f54997e3c223833a68f08/de-mi-doroslishaiemo-mapa-strakhiv-i-rishen-under-27/index.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 text-lg font-bold text-black hover:text-neutral-700 transition-colors underline underline-offset-4 decoration-2 decoration-black/30 hover:decoration-black"
+              >
+                Відкрити інтерактивну мапу «Де ми дорослішаємо: мапа страхів і рішень»
+                <span aria-hidden="true">→</span>
+              </a>
+            </div>
             {article.category?.name && (
                 <div className="text-sm w-fit mt-4 uppercase font-bold text-white bg-black px-4 py-1.5">
                   {article.category.name}
