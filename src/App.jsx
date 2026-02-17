@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import Navbar from './components/navbar'
+import Navbar from './components/Navbar.jsx'
 import './App.css'
-import Team from './components/Team'
-import Articles from './components/Articles'
-import Contact from './components/Contact'
-import Admin from './components/Admin'
-import Hero from './components/Hero'
-import CategoryPage from './components/CategoryPage'
-import ArticleDetail from './components/ArticleDetail'
+import Team from './components/Team.jsx'
+import Articles from './components/Articles.jsx'
+import Contact from './components/Contact.jsx'
+import Admin from './components/Admin.jsx'
+import Hero from './components/Hero.jsx'
+import CategoryPage from './components/CategoryPage.jsx'
+import ArticleDetail from './components/ArticleDetail.jsx'
 
 function App() {
   const [activeTab, setActiveTab] = useState("")

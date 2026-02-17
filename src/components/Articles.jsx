@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import ScrollVelocity from './UI/ScrollVelocity'
-import Article from './Article'
+import Article from './Article.jsx'
 import { supabase } from './supabase-client'
 
 function Articles({ activeTab, onOpenArticle }) {
