@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase-client";
 import { IoArrowBack } from "react-icons/io5";
+
+let juxtaposeAssetsPromise = null;
 
 function fmtUA(ts) {
   try {
@@ -14,24 +16,157 @@ function fmtUA(ts) {
   }
 }
 
+function loadJuxtaposeAssets() {
+  if (typeof window !== "undefined" && window.juxtapose?.JXSlider) {
+    return Promise.resolve();
+  }
+
+  if (juxtaposeAssetsPromise) return juxtaposeAssetsPromise;
+
+  juxtaposeAssetsPromise = new Promise((resolve, reject) => {
+    const cssId = "juxtapose-css";
+    const jsId = "juxtapose-js";
+
+    if (!document.getElementById(cssId)) {
+      const link = document.createElement("link");
+      link.id = cssId;
+      link.rel = "stylesheet";
+      link.href =
+        "https://cdn.knightlab.com/libs/juxtapose/latest/css/juxtapose.css";
+      document.head.appendChild(link);
+    }
+
+    const finish = () => {
+      if (window.juxtapose?.JXSlider) {
+        resolve();
+      } else {
+        reject(new Error("JuxtaposeJS не ініціалізувався"));
+      }
+    };
+
+    const existingScript = document.getElementById(jsId);
+    if (existingScript) {
+      if (window.juxtapose?.JXSlider) {
+        finish();
+        return;
+      }
+
+      existingScript.addEventListener("load", finish, { once: true });
+      existingScript.addEventListener(
+        "error",
+        () => reject(new Error("Не вдалося завантажити JuxtaposeJS")),
+        { once: true }
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = jsId;
+    script.src =
+      "https://cdn.knightlab.com/libs/juxtapose/latest/js/juxtapose.min.js";
+    script.async = true;
+    script.onload = finish;
+    script.onerror = () =>
+      reject(new Error("Не вдалося завантажити JuxtaposeJS"));
+
+    document.body.appendChild(script);
+  });
+
+  return juxtaposeAssetsPromise;
+}
+
 function isAllowedJuxtaposeUrl(url) {
   try {
     const u = new URL(url);
+
     return (
+      (u.hostname === "cdn.knightlab.com" &&
+        u.pathname.includes("/libs/juxtapose/")) ||
       u.hostname === "juxtapose.knightlab.com" ||
-      u.hostname === "cdn.knightlab.com"
+      (u.hostname === "s3.amazonaws.com" &&
+        u.pathname.startsWith("/uploads.knightlab.com/juxtapose/")) ||
+      (u.hostname === "uploads.knightlab.com" &&
+        u.pathname.startsWith("/juxtapose/"))
     );
   } catch {
     return false;
   }
 }
 
+function getJuxtaposeJsonUrl(embedUrl) {
+  try {
+    const cleaned = String(embedUrl || "").trim();
+    const u = new URL(cleaned);
+
+    // Direct JSON URL support, just in case
+    if (
+      (u.hostname === "s3.amazonaws.com" &&
+        u.pathname.startsWith("/uploads.knightlab.com/juxtapose/") &&
+        u.pathname.endsWith(".json")) ||
+      (u.hostname === "uploads.knightlab.com" &&
+        u.pathname.startsWith("/juxtapose/") &&
+        u.pathname.endsWith(".json"))
+    ) {
+      return u.toString();
+    }
+
+    const uid = u.searchParams.get("uid");
+    if (!uid) return null;
+
+    const decoded = decodeURIComponent(uid).trim();
+    if (!decoded) return null;
+
+    // Knight Lab also supports uid being a direct URL
+    if (/^https?:\/\//i.test(decoded)) {
+      return decoded;
+    }
+
+    const cleanUid = decoded.replace(/\/+$/, "");
+    return `https://s3.amazonaws.com/uploads.knightlab.com/juxtapose/${cleanUid}.json`;
+  } catch {
+    return null;
+  }
+}
+
+function stripHtml(value) {
+  return String(value ?? "")
+    .replace(/<[^>]*>/g, "")
+    .trim();
+}
+
+function normalizeJuxtaposeConfig(json) {
+  if (!json || !Array.isArray(json.images) || json.images.length < 2) {
+    return null;
+  }
+
+  const images = json.images.slice(0, 2).map((img) => ({
+    src: img?.src || "",
+    label: stripHtml(img?.label),
+    credit: stripHtml(img?.credit),
+  }));
+
+  if (!images[0]?.src || !images[1]?.src) {
+    return null;
+  }
+
+  return {
+    images,
+    options: {
+      animate: json?.options?.animate ?? true,
+      showLabels: json?.options?.showLabels ?? true,
+      showCredits: json?.options?.showCredits ?? true,
+      startingPosition: json?.options?.startingPosition ?? "50%",
+      mode: json?.options?.mode === "vertical" ? "vertical" : "horizontal",
+      makeResponsive: true,
+    },
+  };
+}
+
 function renderBodyWithEmbeds(body) {
   const raw = String(body || "");
 
-  // Matches a full line like:
-  // [juxtapose:https://juxtapose.knightlab.com/....]
-  const regex = /^\[juxtapose:(https?:\/\/[^\s\]]+)\]$/gm;
+  // detect: [juxtapose:URL]
+  const regex = /\[juxtapose:(https?:\/\/[^\]]+)\]/gi;
 
   const parts = [];
   let lastIndex = 0;
@@ -39,16 +174,16 @@ function renderBodyWithEmbeds(body) {
   let key = 0;
 
   while ((match = regex.exec(raw)) !== null) {
-    const fullMatch = match[0];
     const url = match[1];
-    const start = match.index;
-    const end = start + fullMatch.length;
 
-    const textBefore = raw.slice(lastIndex, start);
-    if (textBefore.trim()) {
+    if (!isAllowedJuxtaposeUrl(url)) continue;
+
+    const before = raw.slice(lastIndex, match.index);
+
+    if (before.trim()) {
       parts.push({
         type: "text",
-        content: textBefore,
+        content: before,
         key: `text-${key++}`,
       });
     }
@@ -59,10 +194,11 @@ function renderBodyWithEmbeds(body) {
       key: `jx-${key++}`,
     });
 
-    lastIndex = end;
+    lastIndex = match.index + match[0].length;
   }
 
   const tail = raw.slice(lastIndex);
+
   if (tail.trim()) {
     parts.push({
       type: "text",
@@ -71,7 +207,6 @@ function renderBodyWithEmbeds(body) {
     });
   }
 
-  // if no markers found, render as normal text
   if (parts.length === 0) {
     return [
       {
@@ -83,6 +218,129 @@ function renderBodyWithEmbeds(body) {
   }
 
   return parts;
+}
+
+function JuxtaposeInline({ url }) {
+  const hostRef = useRef(null);
+  const sliderIdRef = useRef(
+    `juxtapose-${Math.random().toString(36).slice(2)}`
+  );
+
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function init() {
+      setLoading(true);
+      setErr("");
+
+      try {
+        const jsonUrl = getJuxtaposeJsonUrl(url);
+        if (!jsonUrl) {
+          throw new Error("Невалідне посилання Juxtapose");
+        }
+
+        const [_, res] = await Promise.all([
+          loadJuxtaposeAssets(),
+          fetch(jsonUrl, {
+            method: "GET",
+            mode: "cors",
+            credentials: "omit",
+          }),
+        ]);
+
+        if (!res.ok) {
+          throw new Error("Не вдалося завантажити Juxtapose");
+        }
+
+        const rawConfig = await res.json();
+        const config = normalizeJuxtaposeConfig(rawConfig);
+
+        if (!config) {
+          throw new Error("Порожня конфігурація Juxtapose");
+        }
+
+        if (cancelled || !hostRef.current || !window.juxtapose?.JXSlider) {
+          return;
+        }
+
+        hostRef.current.innerHTML = "";
+
+        const mount = document.createElement("div");
+        mount.id = sliderIdRef.current;
+        mount.style.width = "100%";
+        hostRef.current.appendChild(mount);
+
+        new window.juxtapose.JXSlider(
+          `#${sliderIdRef.current}`,
+          config.images,
+          config.options
+        );
+
+        if (!cancelled) {
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          setErr(e.message || "Не вдалося завантажити інтерактив");
+          setLoading(false);
+        }
+      }
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      if (hostRef.current) {
+        hostRef.current.innerHTML = "";
+      }
+    };
+  }, [url]);
+
+  return (
+    <section className="my-4">
+      <div className="mb-3 flex items-center justify-between gap-4">
+        <div className="text-sm uppercase tracking-[0.14em] font-bold text-neutral-500">
+          Інтерактив
+        </div>
+
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm font-semibold text-black underline underline-offset-4 decoration-black/30 hover:decoration-black transition"
+        >
+          Відкрити окремо
+        </a>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-100 shadow-[0_20px_60px_rgba(0,0,0,0.08)] p-3 sm:p-4">
+        {err ? (
+          <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+            {err}
+          </div>
+        ) : (
+          <>
+            {loading && (
+              <div className="mb-3 text-sm text-neutral-500">
+                Завантаження інтерактиву…
+              </div>
+            )}
+
+            <div
+              ref={hostRef}
+              className="article-juxtapose w-full overflow-hidden"
+              style={{ minHeight: loading ? 260 : undefined }}
+            />
+          </>
+        )}
+      </div>
+    </section>
+  );
 }
 
 export default function ArticleDetail({ articleId, onBack }) {
@@ -131,6 +389,24 @@ export default function ArticleDetail({ articleId, onBack }) {
 
   return (
     <div className="min-h-screen w-full bg-white flex justify-center mr-20">
+      <style>{`
+        .article-juxtapose,
+        .article-juxtapose .juxtapose,
+        .article-juxtapose .jx-slider {
+          width: 100% !important;
+          max-width: none !important;
+        }
+
+        .article-juxtapose .juxtapose,
+        .article-juxtapose .jx-slider {
+          margin: 0 !important;
+        }
+
+        .article-juxtapose img {
+          max-width: none !important;
+        }
+      `}</style>
+
       <div className="w-full max-w-3xl px-6 md:px-12 lg:px-20 pt-8 pb-16">
         <button
           onClick={onBack}
@@ -183,10 +459,7 @@ export default function ArticleDetail({ articleId, onBack }) {
               {bodyParts.map((part) => {
                 if (part.type === "text") {
                   return (
-                    <div
-                      key={part.key}
-                      className="max-w-none my-0"
-                    >
+                    <div key={part.key} className="max-w-none my-0">
                       <div className="whitespace-pre-wrap leading-relaxed">
                         {part.content}
                       </div>
@@ -195,45 +468,7 @@ export default function ArticleDetail({ articleId, onBack }) {
                 }
 
                 if (part.type === "juxtapose") {
-                  if (!isAllowedJuxtaposeUrl(part.url)) {
-                    return (
-                      <div
-                        key={part.key}
-                        className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-red-700"
-                      >
-                        Невалідне посилання Juxtapose.
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <section key={part.key}>
-                      <div className="mb-1 flex items-center justify-between gap-1">
-                        <div className="text-sm uppercase tracking-[0.14em] font-bold text-neutral-500">
-                          Інтерактив
-                        </div>
-
-                        <a
-                          href={part.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm font-semibold text-black underline underline-offset-4 decoration-black/30 hover:decoration-black transition"
-                        >
-                          Відкрити окремо
-                        </a>
-                      </div>
-
-                      <div className="overflow-hidden rounded-2xl bg-neutral-100 border border-neutral-200 shadow-[0_20px_60px_rgba(0,0,0,0.08)]">
-                        <iframe
-                          src={part.url}
-                          title="Juxtapose interactive"
-                          className="block w-full h-[420px] md:h-[520px] lg:h-[560px]"
-                          loading="lazy"
-                          allowFullScreen
-                        />
-                      </div>
-                    </section>
-                  );
+                  return <JuxtaposeInline key={part.key} url={part.url} />;
                 }
 
                 return null;
