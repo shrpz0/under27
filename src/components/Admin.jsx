@@ -24,7 +24,7 @@ export default function Admin() {
   const [subtitle, setSubtitle] = useState("")
   const [body, setBody] = useState("")
   const [categoryId, setCategoryId] = useState("")
-  const [timeToRead, setTimeToRead] = useState("") // <-- NEW (string for input)
+  const [timeToRead, setTimeToRead] = useState("")
   const [coverUrl, setCoverUrl] = useState("")
   const [coverFile, setCoverFile] = useState(null)
 
@@ -118,7 +118,7 @@ export default function Admin() {
     setSubtitle("")
     setBody("")
     setCategoryId("")
-    setTimeToRead("") // <-- NEW
+    setTimeToRead("")
     setCoverUrl("")
     setCoverFile(null)
   }
@@ -143,7 +143,7 @@ export default function Admin() {
         data.time_to_read === null || data.time_to_read === undefined
           ? ""
           : String(data.time_to_read)
-      ) // <-- NEW
+      )
       setCoverUrl(data.cover_url || "")
       setCoverFile(null)
     } catch (e) {
@@ -161,7 +161,6 @@ export default function Admin() {
     if (!Number.isFinite(n)) return "ERR"
     const int = Math.trunc(n)
     if (int < 0) return "ERR"
-    // int2 range guard (optional)
     if (int > 32767) return "ERR"
     return int
   }
@@ -191,7 +190,7 @@ export default function Admin() {
           body: b,
           user_id: user.id,
           category_id: Number(categoryId),
-          time_to_read: ttr, // <-- NEW
+          time_to_read: ttr,
           cover_url: finalCoverUrl || null,
         })
         if (error) throw error
@@ -203,7 +202,7 @@ export default function Admin() {
             subtitle: s,
             body: b,
             category_id: Number(categoryId),
-            time_to_read: ttr, // <-- NEW
+            time_to_read: ttr,
             cover_url: finalCoverUrl || null,
           })
           .eq("id", editingId)
@@ -275,8 +274,7 @@ export default function Admin() {
 
           {authMsg && <div className="mt-4 text-sm text-red-600">{authMsg}</div>}
 
-          <div className="mt-6 text-xs text-neutral-500">
-          </div>
+          <div className="mt-6 text-xs text-neutral-500"></div>
         </div>
       </div>
     )
@@ -442,10 +440,36 @@ export default function Admin() {
 
               <div>
                 <div className="text-sm text-neutral-500 mb-1">Body</div>
+
+                <div className="mb-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-700">
+                  <div className="font-semibold text-black mb-2">Вставки в текст</div>
+
+                  <div className="space-y-2">
+                    <div>
+                      Juxtapose:
+                      <div className="mt-1 font-mono text-xs break-all">
+                        [juxtapose:https://cdn.knightlab.com/libs/juxtapose/latest/embed/index.html?uid=...]
+                      </div>
+                    </div>
+
+                    <div>
+                      Cloudinary video:
+                      <div className="mt-1 font-mono text-xs break-all">
+                        [cloudinary-video:https://res.cloudinary.com/your-cloud/video/upload/v1234567890/video.mp4]
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <textarea
-                  className="border border-neutral-300 rounded-xl px-4 py-3 w-full min-h-[240px] font-mono"
+                  className="border border-neutral-300 rounded-xl px-4 py-3 w-full min-h-[280px] font-mono"
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
+                  placeholder={`Текст статьи...
+
+[cloudinary-video:https://res.cloudinary.com/your-cloud/video/upload/v1234567890/video.mp4]
+
+Дальше продолжается текст...`}
                 />
               </div>
 

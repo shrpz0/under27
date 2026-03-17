@@ -98,7 +98,6 @@ function getJuxtaposeJsonUrl(embedUrl) {
     const cleaned = String(embedUrl || "").trim();
     const u = new URL(cleaned);
 
-    // Direct JSON URL support, just in case
     if (
       (u.hostname === "s3.amazonaws.com" &&
         u.pathname.startsWith("/uploads.knightlab.com/juxtapose/") &&
@@ -116,7 +115,6 @@ function getJuxtaposeJsonUrl(embedUrl) {
     const decoded = decodeURIComponent(uid).trim();
     if (!decoded) return null;
 
-    // Knight Lab also supports uid being a direct URL
     if (/^https?:\/\//i.test(decoded)) {
       return decoded;
     }
@@ -162,11 +160,72 @@ function normalizeJuxtaposeConfig(json) {
   };
 }
 
+function getCloudinaryVideoKind(url) {
+  try {
+    const u = new URL(url);
+
+    if (
+      u.hostname === "res.cloudinary.com" &&
+      u.pathname.includes("/video/upload/")
+    ) {
+      return "file";
+    }
+
+    if (
+      u.hostname === "player.cloudinary.com" &&
+      u.pathname.startsWith("/embed/")
+    ) {
+      return "player";
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedCloudinaryVideoUrl(url) {
+  return getCloudinaryVideoKind(url) !== null;
+}
+
+function parseRatioValue(value) {
+  if (!value) return null;
+
+  const cleaned = String(value).trim();
+  const match = cleaned.match(/^(\d+)\s*\/\s*(\d+)$/);
+
+  if (!match) return null;
+
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+    return null;
+  }
+
+  return `${w} / ${h}`;
+}
+
+function isVerticalRatio(ratio) {
+  const match = String(ratio || "")
+    .trim()
+    .match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+
+  if (!match) return false;
+
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+
+  if (!Number.isFinite(w) || !Number.isFinite(h) || h === 0) return false;
+
+  return w < h;
+}
+
 function renderBodyWithEmbeds(body) {
   const raw = String(body || "");
 
-  // detect: [juxtapose:URL]
-  const regex = /\[juxtapose:(https?:\/\/[^\]]+)\]/gi;
+  const regex =
+    /\[(juxtapose|cloudinary-video):(https?:\/\/[^\]|]+)(?:\|ratio:([0-9]+\s*\/\s*[0-9]+))?\]/gi;
 
   const parts = [];
   let lastIndex = 0;
@@ -174,9 +233,21 @@ function renderBodyWithEmbeds(body) {
   let key = 0;
 
   while ((match = regex.exec(raw)) !== null) {
-    const url = match[1];
+    const type = String(match[1] || "").toLowerCase();
+    const url = match[2];
+    const ratio = parseRatioValue(match[3]);
 
-    if (!isAllowedJuxtaposeUrl(url)) continue;
+    let allowed = false;
+
+    if (type === "juxtapose") {
+      allowed = isAllowedJuxtaposeUrl(url);
+    }
+
+    if (type === "cloudinary-video") {
+      allowed = isAllowedCloudinaryVideoUrl(url);
+    }
+
+    if (!allowed) continue;
 
     const before = raw.slice(lastIndex, match.index);
 
@@ -189,9 +260,10 @@ function renderBodyWithEmbeds(body) {
     }
 
     parts.push({
-      type: "juxtapose",
+      type,
       url,
-      key: `jx-${key++}`,
+      ratio,
+      key: `embed-${key++}`,
     });
 
     lastIndex = match.index + match[0].length;
@@ -242,7 +314,7 @@ function JuxtaposeInline({ url }) {
           throw new Error("Невалідне посилання Juxtapose");
         }
 
-        const [_, res] = await Promise.all([
+        const [, res] = await Promise.all([
           loadJuxtaposeAssets(),
           fetch(jsonUrl, {
             method: "GET",
@@ -302,7 +374,7 @@ function JuxtaposeInline({ url }) {
   }, [url]);
 
   return (
-    <section className="my-4">
+    <section className="my-6 md:my-8">
       <div className="mb-3 flex items-center justify-between gap-4">
         <div className="text-sm uppercase tracking-[0.14em] font-bold text-neutral-500">
           Інтерактив
@@ -338,6 +410,117 @@ function JuxtaposeInline({ url }) {
             />
           </>
         )}
+      </div>
+    </section>
+  );
+}
+
+function CloudinaryVideoInline({ url, forcedRatio = null }) {
+  const kind = getCloudinaryVideoKind(url);
+  const initialRatio = parseRatioValue(forcedRatio) || "16 / 9";
+  const [ratio, setRatio] = useState(initialRatio);
+
+  useEffect(() => {
+    const parsedForcedRatio = parseRatioValue(forcedRatio);
+
+    if (parsedForcedRatio) {
+      setRatio(parsedForcedRatio);
+      return;
+    }
+
+    setRatio("16 / 9");
+
+    if (kind !== "file") return;
+
+    let cancelled = false;
+    const video = document.createElement("video");
+
+    const handleLoadedMetadata = () => {
+      if (cancelled) return;
+
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+
+      if (w && h) {
+        setRatio(`${w} / ${h}`);
+      }
+    };
+
+    const handleError = () => {
+      if (!cancelled) {
+        setRatio("16 / 9");
+      }
+    };
+
+    video.preload = "metadata";
+    video.src = url;
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("error", handleError);
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("error", handleError);
+      video.src = "";
+    };
+  }, [url, kind, forcedRatio]);
+
+  if (!kind) {
+    return (
+      <section className="my-6 md:my-8">
+        <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+          Невалідне посилання Cloudinary
+        </div>
+      </section>
+    );
+  }
+
+  const vertical = isVerticalRatio(ratio);
+
+  return (
+    <section className="my-6 md:my-8">
+      <div className="mb-3 flex items-center justify-between gap-4">
+        <div className="text-sm uppercase tracking-[0.14em] font-bold text-neutral-500">
+          Відео
+        </div>
+
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm font-semibold text-black underline underline-offset-4 decoration-black/30 hover:decoration-black transition"
+        >
+          Відкрити окремо
+        </a>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-950 shadow-[0_20px_60px_rgba(0,0,0,0.12)]">
+        <div
+          className={`relative mx-auto w-full ${
+            vertical ? "max-w-[420px]" : "max-w-full"
+          }`}
+          style={{ aspectRatio: ratio }}
+        >
+          {kind === "file" ? (
+            <video
+              src={url}
+              controls
+              playsInline
+              preload="metadata"
+              className="h-full w-full bg-black object-contain"
+            >
+              Your browser does not support HTML5 video.
+            </video>
+          ) : (
+            <iframe
+              src={url}
+              title="Cloudinary video player"
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+              allowFullScreen
+              className="h-full w-full border-0 bg-black"
+            />
+          )}
+        </div>
       </div>
     </section>
   );
@@ -460,7 +643,7 @@ export default function ArticleDetail({ articleId, onBack }) {
                 if (part.type === "text") {
                   return (
                     <div key={part.key} className="max-w-none my-0">
-                      <div className="whitespace-pre-wrap leading-relaxed">
+                      <div className="whitespace-pre-wrap leading-[1.9] text-[1.06rem] md:text-[1.12rem] text-neutral-900">
                         {part.content}
                       </div>
                     </div>
@@ -469,6 +652,16 @@ export default function ArticleDetail({ articleId, onBack }) {
 
                 if (part.type === "juxtapose") {
                   return <JuxtaposeInline key={part.key} url={part.url} />;
+                }
+
+                if (part.type === "cloudinary-video") {
+                  return (
+                    <CloudinaryVideoInline
+                      key={part.key}
+                      url={part.url}
+                      forcedRatio={part.ratio}
+                    />
+                  );
                 }
 
                 return null;
