@@ -225,7 +225,7 @@ function renderBodyWithEmbeds(body) {
   const raw = String(body || "");
 
   const regex =
-    /\[(juxtapose|cloudinary-video):(https?:\/\/[^\]|]+)(?:\|ratio:([0-9]+\s*\/\s*[0-9]+))?\]/gi;
+    /\[\[(subtitle):([\s\S]*?)\]\]|\[\[(quote):([\s\S]*?)(?:\|author:([\s\S]*?))?\]\]|\[(juxtapose|cloudinary-video):(https?:\/\/[^\]|]+)(?:\|ratio:([0-9]+\s*\/\s*[0-9]+))?\]/gi;
 
   const parts = [];
   let lastIndex = 0;
@@ -233,22 +233,6 @@ function renderBodyWithEmbeds(body) {
   let key = 0;
 
   while ((match = regex.exec(raw)) !== null) {
-    const type = String(match[1] || "").toLowerCase();
-    const url = match[2];
-    const ratio = parseRatioValue(match[3]);
-
-    let allowed = false;
-
-    if (type === "juxtapose") {
-      allowed = isAllowedJuxtaposeUrl(url);
-    }
-
-    if (type === "cloudinary-video") {
-      allowed = isAllowedCloudinaryVideoUrl(url);
-    }
-
-    if (!allowed) continue;
-
     const before = raw.slice(lastIndex, match.index);
 
     if (before.trim()) {
@@ -259,12 +243,58 @@ function renderBodyWithEmbeds(body) {
       });
     }
 
-    parts.push({
-      type,
-      url,
-      ratio,
-      key: `embed-${key++}`,
-    });
+    if (match[1] === "subtitle") {
+      const content = String(match[2] || "").trim();
+
+      if (content) {
+        parts.push({
+          type: "subtitle",
+          content,
+          key: `subtitle-${key++}`,
+        });
+      }
+    } else if (match[3] === "quote") {
+      const content = String(match[4] || "").trim();
+      const author = String(match[5] || "").trim();
+
+      if (content) {
+        parts.push({
+          type: "quote",
+          content,
+          author,
+          key: `quote-${key++}`,
+        });
+      }
+    } else {
+      const type = String(match[6] || "").toLowerCase();
+      const url = match[7];
+      const ratio = parseRatioValue(match[8]);
+
+      let allowed = false;
+
+      if (type === "juxtapose") {
+        allowed = isAllowedJuxtaposeUrl(url);
+      }
+
+      if (type === "cloudinary-video") {
+        allowed = isAllowedCloudinaryVideoUrl(url);
+      }
+
+      if (allowed) {
+        parts.push({
+          type,
+          url,
+          ratio,
+          key: `embed-${key++}`,
+        });
+      } else {
+        parts.push({
+          type: "text",
+          content: match[0],
+          key: `text-${key++}`,
+        });
+      }
+    }
 
     lastIndex = match.index + match[0].length;
   }
@@ -647,6 +677,36 @@ export default function ArticleDetail({ articleId, onBack }) {
                         {part.content}
                       </div>
                     </div>
+                  );
+                }
+
+                if (part.type === "subtitle") {
+                  return (
+                    <h2
+                      key={part.key}
+                      className="text-2xl md:text-3xl font-bold leading-tight tracking-tight text-black"
+                    >
+                      {part.content}
+                    </h2>
+                  );
+                }
+
+                if (part.type === "quote") {
+                  return (
+                    <figure
+                      key={part.key}
+                      className="my-8 border-l-4 border-black pl-5 py-1"
+                    >
+                      <blockquote className="text-xl md:text-2xl leading-relaxed italic text-neutral-900">
+                        “{part.content}”
+                      </blockquote>
+
+                      {part.author && (
+                        <figcaption className="mt-3 text-sm uppercase tracking-[0.12em] font-semibold text-neutral-500">
+                          — {part.author}
+                        </figcaption>
+                      )}
+                    </figure>
                   );
                 }
 
