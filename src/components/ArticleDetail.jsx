@@ -132,34 +132,6 @@ function stripHtml(value) {
     .trim();
 }
 
-function normalizeJuxtaposeConfig(json) {
-  if (!json || !Array.isArray(json.images) || json.images.length < 2) {
-    return null;
-  }
-
-  const images = json.images.slice(0, 2).map((img) => ({
-    src: img?.src || "",
-    label: stripHtml(img?.label),
-    credit: stripHtml(img?.credit),
-  }));
-
-  if (!images[0]?.src || !images[1]?.src) {
-    return null;
-  }
-
-  return {
-    images,
-    options: {
-      animate: json?.options?.animate ?? true,
-      showLabels: json?.options?.showLabels ?? true,
-      showCredits: json?.options?.showCredits ?? true,
-      startingPosition: json?.options?.startingPosition ?? "50%",
-      mode: json?.options?.mode === "vertical" ? "vertical" : "horizontal",
-      makeResponsive: true,
-    },
-  };
-}
-
 function getCloudinaryVideoKind(url) {
   try {
     const u = new URL(url);
@@ -186,6 +158,23 @@ function getCloudinaryVideoKind(url) {
 
 function isAllowedCloudinaryVideoUrl(url) {
   return getCloudinaryVideoKind(url) !== null;
+}
+
+function isAllowedSupabaseImageUrl(url) {
+  try {
+    const u = new URL(url);
+    const pathname = u.pathname.toLowerCase();
+
+    const isSupabase =
+      u.hostname.endsWith(".supabase.co") &&
+      pathname.includes("/storage/v1/object/public/");
+
+    const isImage = /\.(jpg|jpeg|png|webp|gif|avif)$/i.test(pathname);
+
+    return isSupabase && isImage;
+  } catch {
+    return false;
+  }
 }
 
 function parseRatioValue(value) {
@@ -223,29 +212,42 @@ function isVerticalRatio(ratio) {
 
 function renderBodyWithEmbeds(body) {
   const raw = String(body || "");
-
-  const regex =
-    /\[\[(subtitle):([\s\S]*?)\]\]|\[\[(quote):([\s\S]*?)(?:\|author:([\s\S]*?))?\]\]|\[(juxtapose|cloudinary-video):(https?:\/\/[^\]|]+)(?:\|ratio:([0-9]+\s*\/\s*[0-9]+))?\]/gi;
+  const lines = raw.split("\n");
 
   const parts = [];
-  let lastIndex = 0;
-  let match;
+  let textBuffer = [];
   let key = 0;
 
-  while ((match = regex.exec(raw)) !== null) {
-    const before = raw.slice(lastIndex, match.index);
-
-    if (before.trim()) {
+  const flushTextBuffer = () => {
+    const content = textBuffer.join("\n").trim();
+    if (content) {
       parts.push({
         type: "text",
-        content: before,
+        content,
         key: `text-${key++}`,
       });
     }
+    textBuffer = [];
+  };
 
-    if (match[1] === "subtitle") {
-      const content = String(match[2] || "").trim();
+  const embedRegex =
+    /^\[(juxtapose|cloudinary-video):(https?:\/\/[^\]|]+)(?:\|ratio:([0-9]+\s*\/\s*[0-9]+))?\]$/i;
 
+  const subtitleRegex = /^\[\[(subtitle):([\s\S]*?)\]\]$/i;
+  const quoteRegex = /^\[\[(quote):([\s\S]*?)(?:\|author:([\s\S]*?))?\]\]$/i;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      textBuffer.push("");
+      continue;
+    }
+
+    const subtitleMatch = line.match(subtitleRegex);
+    if (subtitleMatch) {
+      flushTextBuffer();
+      const content = String(subtitleMatch[2] || "").trim();
       if (content) {
         parts.push({
           type: "subtitle",
@@ -253,9 +255,14 @@ function renderBodyWithEmbeds(body) {
           key: `subtitle-${key++}`,
         });
       }
-    } else if (match[3] === "quote") {
-      const content = String(match[4] || "").trim();
-      const author = String(match[5] || "").trim();
+      continue;
+    }
+
+    const quoteMatch = line.match(quoteRegex);
+    if (quoteMatch) {
+      flushTextBuffer();
+      const content = String(quoteMatch[2] || "").trim();
+      const author = String(quoteMatch[3] || "").trim();
 
       if (content) {
         parts.push({
@@ -265,10 +272,16 @@ function renderBodyWithEmbeds(body) {
           key: `quote-${key++}`,
         });
       }
-    } else {
-      const type = String(match[6] || "").toLowerCase();
-      const url = match[7];
-      const ratio = parseRatioValue(match[8]);
+      continue;
+    }
+
+    const embedMatch = line.match(embedRegex);
+    if (embedMatch) {
+      flushTextBuffer();
+
+      const type = String(embedMatch[1] || "").toLowerCase();
+      const url = embedMatch[2];
+      const ratio = parseRatioValue(embedMatch[3]);
 
       let allowed = false;
 
@@ -287,27 +300,24 @@ function renderBodyWithEmbeds(body) {
           ratio,
           key: `embed-${key++}`,
         });
-      } else {
-        parts.push({
-          type: "text",
-          content: match[0],
-          key: `text-${key++}`,
-        });
+        continue;
       }
     }
 
-    lastIndex = match.index + match[0].length;
+    if (isAllowedSupabaseImageUrl(line)) {
+      flushTextBuffer();
+      parts.push({
+        type: "supabase-image",
+        url: line,
+        key: `image-${key++}`,
+      });
+      continue;
+    }
+
+    textBuffer.push(rawLine);
   }
 
-  const tail = raw.slice(lastIndex);
-
-  if (tail.trim()) {
-    parts.push({
-      type: "text",
-      content: tail,
-      key: `text-${key++}`,
-    });
-  }
+  flushTextBuffer();
 
   if (parts.length === 0) {
     return [
@@ -556,6 +566,49 @@ function CloudinaryVideoInline({ url, forcedRatio = null }) {
   );
 }
 
+function SupabaseImageInline({ url }) {
+  return (
+    <figure className="my-2 md:my-4">
+      <div className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-100 shadow-[0_20px_60px_rgba(0,0,0,0.08)]">
+        <img
+          src={url}
+          alt=""
+          loading="lazy"
+          className="block w-full h-auto object-cover"
+        />
+      </div>
+    </figure>
+  );
+}
+
+function normalizeJuxtaposeConfig(json) {
+  if (!json || !Array.isArray(json.images) || json.images.length < 2) {
+    return null;
+  }
+
+  const images = json.images.slice(0, 2).map((img) => ({
+    src: img?.src || "",
+    label: stripHtml(img?.label),
+    credit: stripHtml(img?.credit),
+  }));
+
+  if (!images[0]?.src || !images[1]?.src) {
+    return null;
+  }
+
+  return {
+    images,
+    options: {
+      animate: json?.options?.animate ?? true,
+      showLabels: json?.options?.showLabels ?? true,
+      showCredits: json?.options?.showCredits ?? true,
+      startingPosition: json?.options?.startingPosition ?? "50%",
+      mode: json?.options?.mode === "vertical" ? "vertical" : "horizontal",
+      makeResponsive: true,
+    },
+  };
+}
+
 export default function ArticleDetail({ articleId, onBack }) {
   const [loading, setLoading] = useState(false);
   const [article, setArticle] = useState(null);
@@ -722,6 +775,10 @@ export default function ArticleDetail({ articleId, onBack }) {
                       forcedRatio={part.ratio}
                     />
                   );
+                }
+
+                if (part.type === "supabase-image") {
+                  return <SupabaseImageInline key={part.key} url={part.url} />;
                 }
 
                 return null;
