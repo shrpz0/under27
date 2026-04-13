@@ -684,7 +684,7 @@ export default function ArticleDetail({ articleId, onBack }) {
                   return (
                     <h2
                       key={part.key}
-                      className="text-2xl md:text-3xl font-bold leading-tight tracking-tight text-black"
+                      className="text-lg md:text-2xl font-bold leading-tight tracking-tight text-black"
                     >
                       {part.content}
                     </h2>
